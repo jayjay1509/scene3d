@@ -43,10 +43,11 @@ class Model
  private:
   // Données du modèle
   std::vector<Texture> textures_loaded; // S'assure qu'une texture n'est chargée qu'une seule fois.
-  std::vector<Mesh> meshes_;
+
   std::string directory_;
 
  public:
+  std::vector<Mesh> meshes_;
   // Fonction pour récupérer la bounding box du modèle
   void GetBoundingBox(glm::vec3& min, glm::vec3& max) const {
     min = glm::vec3(FLT_MAX, FLT_MAX, FLT_MAX);

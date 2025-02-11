@@ -75,10 +75,10 @@ class Mesh {
   {
     return vertices_;
   }
-
+  unsigned int VAO_, VBO_, EBO_;
  private:
   // Données de rendu
-  unsigned int VAO_, VBO_, EBO_;
+
 
   // Configuration du VAO, VBO et EBO et des attributs de sommet
   void SetupMesh()

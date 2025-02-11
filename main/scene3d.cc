@@ -16,6 +16,8 @@
 #include "model.h"
 #include "scene3d.h"
 #include "shader.h"
+#include <numbers>
+#include <random>
 #include "texture_loader.h"
 
 namespace gpr5300
@@ -32,10 +34,15 @@ class Scene3D final : public Scene
 
  private:
 
+  static constexpr float Lerp(float f) {
+    return 0.1f + f * (1.0f - 0.1f);
+  }
+
 
   float aspect_v = 720.0f;
   float aspect_h = 1280.0f;
   float aspect = aspect_h / aspect_v;
+  int kKernelSize = 32;
 
 
   float fovY = glm::radians(45.0f);
@@ -48,9 +55,25 @@ class Scene3D final : public Scene
   Shader shader_blur_ = {};
   Shader shader_bloom_final_ = {};
 
+  Shader geometry_shader_ = {};
+  Shader lighting_shader_ = {};
+  Shader ssao_shader_ = {};
+  Shader ssao_blur_shader_ = {};
+
+
+
+
   GLuint hdr_fbo_ = 0;
   GLuint color_buffer_[2] = {};
   GLuint rbo_depth_ = 0;
+
+  unsigned int g_buffer_ = 0;
+  unsigned int ssao_fbo_ = 0, ssao_blur_fbo_ = 0;
+  unsigned int g_position_ = 0, g_normal_ = 0, g_albedo_ = 0;
+  unsigned int noise_texture_ = 0;
+  unsigned int ssao_color_buffer_ = 0, ssao_color_buffer_blur_ = 0;
+
+  std::vector<glm::vec3> ssao_kernel_{};
 
   //Pingpong for blur
   GLuint pingpong_fbo_[2] = {};
@@ -79,7 +102,7 @@ class Scene3D final : public Scene
   FreeCamera camera_ {};
   float elapsedTime_ = 0.0f;
 
-  bool Normal_state_ = false;
+
 
   float model_scale_ = 0.05;
   float model_scale_2_ = 0.1;
@@ -90,6 +113,8 @@ class Scene3D final : public Scene
   float scaleFactor_instancing = 0.1f;
   float gamma_ = 2.2f;
   bool bloom_state_ = false;
+  bool ssao_state_ = false;
+  bool Normal_state_ = true;
   float exposure_ = 0.2f;
 
   Frustum frustum_;
@@ -118,6 +143,8 @@ class Scene3D final : public Scene
 
 
 
+
+
 };
 
 void Scene3D::Begin()
@@ -138,6 +165,10 @@ void Scene3D::Begin()
   shader_bloom_final_ = Shader("data/shaders/bloom/bloom_final.vert", "data/shaders/bloom/bloom_final.frag");
   shader_model_ = Shader("data/shaders/scene3d/model.vert", "data/shaders/scene3d/model.frag");
   skybox_program_ = Shader("data/shaders/scene3d/cubemaps.vert", "data/shaders/scene3d/cubemaps.frag");
+  geometry_shader_ = Shader("data/shaders/ssao/geometry_pass.vert","data/shaders/ssao/geometry_pass.frag");
+  lighting_shader_ = Shader("data/shaders/ssao/lightning_pass.vert","data/shaders/ssao/lightning_pass.frag");
+  ssao_shader_ = Shader("data/shaders/ssao/ssao.vert","data/shaders/ssao/ssao.frag");
+  ssao_blur_shader_ = Shader("data/shaders/ssao/ssao_blur.vert","data/shaders/ssao/ssao_blur.frag");
 
 
   model_ = Model("data/15/scene.gltf");
@@ -219,15 +250,14 @@ void Scene3D::Begin()
   srand(15678);
   float radius = 10.0f;
   float offset = 1.0f;
-  for (unsigned int i = 0; i < Instancing_amout; i++)
-  {
+  for (unsigned int i = 0; i < Instancing_amout; i++) {
     glm::mat4 model = glm::mat4(1.0f);
-    float baseAngle = glm::radians((float)i / (float)Instancing_amout * 360.0f);
-    float displacement = (rand() % (int)(2 * offset * 100)) / 100.0f - offset;
+    float baseAngle = glm::radians((float) i / (float) Instancing_amout * 360.0f);
+    float displacement = (rand() % (int) (2 * offset * 100)) / 100.0f - offset;
     float x = sin(baseAngle) * radius + displacement;
-    displacement = (rand() % (int)(2 * offset * 100)) / 100.0f - offset;
+    displacement = (rand() % (int) (2 * offset * 100)) / 100.0f - offset;
     float y = displacement * 0.4f;
-    displacement = (rand() % (int)(2 * offset * 100)) / 100.0f - offset;
+    displacement = (rand() % (int) (2 * offset * 100)) / 100.0f - offset;
     float z = cos(baseAngle) * radius + displacement;
     glm::vec3 pos = glm::vec3(x, y, z);
     float scaleVal = (rand() % 20) / 100.0f + 0.05f;
@@ -240,7 +270,132 @@ void Scene3D::Begin()
         * glm::scale(glm::mat4(1.0f), glm::vec3(scaleVal * scaleFactor_instancing));
 
     modelMatrices[i] = model;
+
   }
+
+
+    glGenFramebuffers(1, &g_buffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_buffer_);
+
+
+    glGenTextures(1, &g_position_);
+    glBindTexture(GL_TEXTURE_2D, g_position_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, aspect_v, aspect_h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_position_, 0);
+
+    glGenTextures(1, &g_normal_);
+    glBindTexture(GL_TEXTURE_2D, g_normal_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, aspect_v, aspect_h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, g_normal_, 0);
+    // color + specular color buffer
+    glGenTextures(1, &g_albedo_);
+    glBindTexture(GL_TEXTURE_2D, g_albedo_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, aspect_v, aspect_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, g_albedo_, 0);
+
+    unsigned int new_attachments[3] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, new_attachments);
+
+    unsigned int rbo_depth;
+    glGenRenderbuffers(1, &rbo_depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo_depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, aspect_v, aspect_h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_depth);
+    // finally check if framebuffer is complete
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      std::cout << "Framebuffer not complete!" << std::endl;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+    glGenFramebuffers(1, &ssao_fbo_);
+    glGenFramebuffers(1, &ssao_blur_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+
+    // SSAO color buffer
+    glGenTextures(1, &ssao_color_buffer_);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_buffer_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, aspect_v, aspect_h, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ssao_color_buffer_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      std::cout << "SSAO Framebuffer not complete!" << std::endl;
+
+    // and blur stage
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+    glGenTextures(1, &ssao_color_buffer_blur_);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_buffer_blur_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, aspect_v, aspect_h, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ssao_color_buffer_blur_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      std::cout << "SSAO Blur Framebuffer not complete!" << std::endl;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // generate sample kernel
+    // ----------------------
+    std::uniform_real_distribution<GLfloat> random_floats(0.0, 1.0); // generates random floats between 0.0 and 1.0
+    std::default_random_engine generator;
+
+    ssao_kernel_.resize(kKernelSize);
+    for (std::int32_t i = 0; i < kKernelSize; ++i) {
+      glm::vec3 sample(random_floats(generator) * 2.0 - 1.0, random_floats(generator) * 2.0 - 1.0,
+                       random_floats(generator));
+      sample = glm::normalize(sample);
+      sample *= random_floats(generator);
+      float scale = static_cast<float>(i) / static_cast<float>(kKernelSize);
+
+      // scale samples s.t. they're more aligned to center of kernel
+      scale = Lerp(scale * scale);
+      sample *= scale;
+      ssao_kernel_.push_back(sample);
+    }
+
+    std::cout << "stuck\n";
+
+    // generate noise texture
+    // ----------------------
+    std::vector<glm::vec3> ssao_noise;
+    for (unsigned int i = 0; i < 16; i++) {
+      glm::vec3 noise(random_floats(generator) * 2.0 - 1.0, random_floats(generator) * 2.0 - 1.0,
+                      0.0f); // rotate around z-axis (in tangent space)
+      ssao_noise.push_back(noise);
+    }
+    glGenTextures(1, &noise_texture_);
+    glBindTexture(GL_TEXTURE_2D, noise_texture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGB, GL_FLOAT, &ssao_noise[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    // shader configuration
+    // --------------------
+    glUseProgram(lighting_shader_.id_);
+    glUniform1i(glGetUniformLocation(lighting_shader_.id_, "gPosition"), 0);
+    glUniform1i(glGetUniformLocation(lighting_shader_.id_, "gNormal"), 1);
+    glUniform1i(glGetUniformLocation(lighting_shader_.id_, "gAlbedo"), 2);
+    glUniform1i(glGetUniformLocation(lighting_shader_.id_, "ssao"), 3);
+    glUseProgram(ssao_shader_.id_);
+    glUniform1i(glGetUniformLocation(ssao_shader_.id_, "gPosition"), 0);
+    glUniform1i(glGetUniformLocation(ssao_shader_.id_, "gNormal"), 1);
+    glUniform1i(glGetUniformLocation(ssao_shader_.id_, "texNoise"), 2);
+    glUseProgram(ssao_blur_shader_.id_);
+    glUniform1i(glGetUniformLocation(ssao_blur_shader_.id_, "ssaoInput"), 0);
+
+
+
+
+
 
 
 
@@ -355,6 +510,7 @@ void Scene3D::Begin()
   Instancing_shader_.Use();
   skybox_program_.Use();
   skybox_program_.SetInt("skybox", 0);
+
 }
 
 void Scene3D::End()
@@ -384,35 +540,32 @@ void Scene3D::Update(const float dt) {
   light_colors_[3] = lightColor3;
 
 
-
-
-
-  // Mise à jour de la caméra et du temps écoulé
   UpdateCamera(dt);
   elapsedTime_ += dt;
 
-  // Effacer l'écran
+
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  // 1. Rendu de la scène dans le framebuffer HDR
+
   glBindFramebuffer(GL_FRAMEBUFFER, hdr_fbo_);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  // Calcul des matrices de projection et vue
+
   auto projection = glm::perspective(fovY, aspect, zNear, zFar);
   auto view = camera_.view();
   auto model = glm::mat4(1.0f);
 
-  // (Optionnel) Vous pouvez activer ici d'autres textures ou uniformes si nécessaire…
+
   glActiveTexture(GL_TEXTURE0);
 
   glBindFramebuffer(GL_FRAMEBUFFER, 1);
-  glDepthFunc(GL_LEQUAL);    // Pour s'assurer que le skybox est dessiné derrière tout le reste
-  glDepthMask(GL_FALSE);     // Désactiver l'écriture dans le buffer de profondeur
+  glDepthFunc(GL_LEQUAL);
+  glDepthMask(GL_FALSE);
 
   skybox_program_.Use();
-  // On retire la composante translation de la vue pour le skybox
+
+
   glm::mat4 viewS = glm::mat4(glm::mat3(view));
   skybox_program_.SetMat4("view", viewS);
   skybox_program_.SetMat4("projection", projection);
@@ -423,17 +576,17 @@ void Scene3D::Update(const float dt) {
   glDrawArrays(GL_TRIANGLES, 0, 36);
   glBindVertexArray(0);
 
-  glDepthMask(GL_TRUE);   // Réactiver l'écriture dans le buffer de profondeur
-  glDepthFunc(GL_LESS);   // Restaurer la fonction de profondeur par défaut
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LESS);
 
 
 
-  // On utilise ici le shader 'shader_model_' qui doit gérer le normal mapping
+
   shader_model_.Use();
   shader_model_.SetMat4("projection", projection);
   shader_model_.SetMat4("view", view);
 
-  // Mise à jour du frustum et envoi des informations de lumière
+
   frustum_.CreateFrustumFromCamera(camera_, aspect, fovY, zNear, zFar);
   glm::mat4 projView = projection * camera_.GetViewMatrix();
   frustum_.Update(projView);
@@ -442,7 +595,6 @@ void Scene3D::Update(const float dt) {
   shader_model_.SetVec3("viewPos", camera_.camera_position_);
 
 
-  // Rendu du premier modèle (model_) avec normal mapping
   model = glm::mat4(1.0f);
   model = glm::translate(model, glm::vec3(1.0f, 0.0f, 0.0f));
   model = glm::scale(model, model_scale_ * glm::vec3(1.0f));
@@ -457,7 +609,7 @@ void Scene3D::Update(const float dt) {
   shader_model_.SetMat4("model", model2);
   model_2_.Draw(shader_model_.id_);
 
-
+  glDisable((GL_CULL_FACE));
   if(Normal_state_){
 
   //-----------------------------------------------------------------------------------------
@@ -476,15 +628,10 @@ void Scene3D::Update(const float dt) {
   glBindTexture(GL_TEXTURE_2D, ground_text_);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, ground_text_normal_);
-  //glDisable((GL_CULL_FACE));
   normal_renderQuad();
-  glEnable(GL_CULL_FACE);
-
-  //----------------------------------------------------------------------------------------------
-
   }
+  glDisable((GL_CULL_FACE));
 
-  glBindVertexArray(0);
 
 
   Instancing_shader_.Use();
@@ -509,9 +656,102 @@ void Scene3D::Update(const float dt) {
       );
     }
   }
-  glBindVertexArray(0);
 
-  // Rendu des sources lumineuses (affichage de cubes lumineux)
+
+  if(ssao_state_) {
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_buffer_);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(geometry_shader_.id_);
+    geometry_shader_.SetMat4("projection", projection);
+    geometry_shader_.SetMat4("view", view);
+
+    glUniform1i(glGetUniformLocation(geometry_shader_.id_, "invertedNormals"), 0);
+    model = glm::mat4(1.0f);
+    for (int i = 0; i < Instancing_Model_.meshes_.size(); i++) {
+      glUniformMatrix4fv(glGetUniformLocation(geometry_shader_.id_, "model"), 1, GL_FALSE,
+                         glm::value_ptr(modelMatrices[i]));
+      glBindVertexArray(Instancing_Model_.meshes_[i].VAO_);
+      glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(Instancing_Model_.meshes_[i].indices_.size()),
+                              GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(Instancing_amout));
+      glBindVertexArray(0);
+    }
+
+    glDisable(GL_CULL_FACE);
+    glFrontFace(GL_CW);
+
+    model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::scale(model, model_scale_ * glm::vec3(1.0f));
+    glUniformMatrix4fv(glGetUniformLocation(geometry_shader_.id_, "model"), 1, GL_FALSE, glm::value_ptr(model));
+    model_.Draw(shader_model_.id_);
+
+    model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(0.0f, 0.0f, 25.0f));
+    model = glm::rotate(model, glm::radians(270.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(model_scale_2_));
+    glUniformMatrix4fv(glGetUniformLocation(geometry_shader_.id_, "model"), 1, GL_FALSE, glm::value_ptr(model));
+    model_2_.Draw(shader_model_.id_);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(ssao_shader_.id_);
+    // Send kernel + rotation
+    for (unsigned int i = 0; i < kKernelSize; ++i) {
+      std::string path = "samples[" + std::to_string(i) + "]";
+      glUniform3f(glGetUniformLocation(ssao_shader_.id_, path.c_str()), ssao_kernel_[i].x, ssao_kernel_[i].y,
+                  ssao_kernel_[i].z);
+    }
+    glUniformMatrix4fv(glGetUniformLocation(ssao_shader_.id_, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_position_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, g_normal_);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, noise_texture_);
+    renderQuad();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(ssao_blur_shader_.id_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_buffer_);
+    renderQuad();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(lighting_shader_.id_);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // send light relevant uniforms
+    glm::vec3 lightPosView = glm::vec3(camera_.view_ * glm::vec4(light_positions_[0], 1.0));
+
+    glUniform3f(glGetUniformLocation(lighting_shader_.id_, "light.Position"), light_positions_[0].x,
+                light_positions_[0].y, light_positions_[0].z);
+    glUniform3f(glGetUniformLocation(lighting_shader_.id_, "light.Color"), light_positions_[0].x,
+                light_positions_[0].y, light_positions_[0].z);
+
+    // Update attenuation parameters
+    const float linear = 0.09f;
+    const float quadratic = 0.032f;
+
+    glUniform1f(glGetUniformLocation(lighting_shader_.id_, "light.Linear"), linear);
+    glUniform1f(glGetUniformLocation(lighting_shader_.id_, "light.Quadratic"), quadratic);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_position_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, g_normal_);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g_albedo_);
+    glActiveTexture(GL_TEXTURE3); //
+    glBindTexture(GL_TEXTURE_2D, ssao_color_buffer_blur_);
+    renderQuad();
+    //-------------------------------------------------------------------------------
+
+  }
+
   shader_light_.Use();
   shader_light_.SetMat4("projection", projection);
   shader_light_.SetMat4("view", view);
@@ -525,7 +765,7 @@ void Scene3D::Update(const float dt) {
   }
   glBindVertexArray(0);
 
-  // 4. Application d'un flou gaussien pour l'effet bloom
+
   bool horizontal = true, first_iteration = true;
   unsigned int amount = 10;
   shader_blur_.Use();
@@ -541,10 +781,6 @@ void Scene3D::Update(const float dt) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 
-
-
-
-  // 5. Rendu final : affichage du framebuffer HDR avec tonemapping et bloom
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   shader_bloom_final_.Use();
   glActiveTexture(GL_TEXTURE0);
@@ -618,8 +854,24 @@ void Scene3D::DrawImGui()
 
   //ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
 
-  ImGui::Checkbox("Enable bloom", &bloom_state_);
-  ImGui::Checkbox("Enable Normal", &Normal_state_);
+  if (ImGui::Checkbox("Enable bloom", &bloom_state_)) {
+    if (bloom_state_) {
+      ssao_state_ = false;
+    }
+  }
+
+  if (ImGui::Checkbox("Enable ssao", &ssao_state_)) {
+    if (ssao_state_) {
+      bloom_state_ = false;
+      Normal_state_ = false;
+    }
+  }
+
+  if (ImGui::Checkbox("Enable Normal", &Normal_state_)) {
+    if (Normal_state_) {
+      ssao_state_ = false;
+    }
+  }
 
   ImGui::SliderFloat("Exposure", &exposure_, 0.01f, 10.0f, "%.1f");
   ImGui::SliderFloat("gamma", &gamma_, 0.01f, 10.0f, "%.1f");
@@ -635,7 +887,7 @@ void Scene3D::DrawImGui()
       "1200x720",
       "Custom"
   };
-  static int current_resolution = 39; // On démarre par exemple sur 16/9
+  static int current_resolution = 3;
 
 
 
