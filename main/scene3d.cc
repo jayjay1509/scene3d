@@ -32,10 +32,15 @@ class Scene3D final : public Scene
 
  private:
 
-  const float aspect = 1280.0f / 720.0f;
-  const float fovY = glm::radians(45.0f);
-  const float zNear = 0.1f;
-  const float zFar = 1000.0f;
+
+  float aspect_v = 720.0f;
+  float aspect_h = 1280.0f;
+  float aspect = aspect_h / aspect_v;
+
+
+  float fovY = glm::radians(45.0f);
+  float zNear = 0.1f;
+  float zFar = 1000.0f;
 
 
   //bloom
@@ -83,6 +88,7 @@ class Scene3D final : public Scene
   float Normal_z = 12.1;
   float Normal_Rotation_angle = 180.1;
   float scaleFactor_instancing = 0.1f;
+  float gamma_ = 2.2f;
   bool bloom_state_ = false;
   float exposure_ = 0.2f;
 
@@ -98,6 +104,17 @@ class Scene3D final : public Scene
 
   unsigned int ground_text_ = 0;
   unsigned int ground_text_normal_ = 0;
+
+
+  glm::vec3 lightPos0 = glm::vec3(0.0f, 0.5f, 10.5f);
+  glm::vec3 lightPos1 = glm::vec3(-40.0f, 0.5f, -30.0f);
+  glm::vec3 lightPos2 = glm::vec3(30.0f, 0.5f, 1.0f);
+  glm::vec3 lightPos3 = glm::vec3(-0.8f, 20.4f, -1.0f);
+
+  glm::vec3 lightColor0 = glm::vec3(5.0f, 5.0f, 5.0f);
+  glm::vec3 lightColor1 = glm::vec3(5.0f, 5.0f, 5.0f);
+  glm::vec3 lightColor2 = glm::vec3(5.0f, 5.0f, 5.0f);
+  glm::vec3 lightColor3 = glm::vec3(5.0f, 5.0f, 5.0f);
 
 
 
@@ -181,15 +198,16 @@ void Scene3D::Begin()
   // lighting info
   // -------------
   // positions
-  light_positions_.push_back(glm::vec3(0.0f, 0.5f, 10.5f));
-  light_positions_.push_back(glm::vec3(-40.0f, 0.50f, -30.0f));
-  light_positions_.push_back(glm::vec3(30.0f, 0.5f, 1.0f));
-  light_positions_.push_back(glm::vec3(-.8f, 20.4f, -1.0f));
+  light_positions_.push_back(lightPos0);
+  light_positions_.push_back(lightPos1);
+  light_positions_.push_back(lightPos2);
+  light_positions_.push_back(lightPos3);
   // colors
-  light_colors_.push_back(glm::vec3(5.0f, 5.0f, 5.0f));
-  light_colors_.push_back(glm::vec3(5.0f, 5.0f, 5.0f));
-  light_colors_.push_back(glm::vec3(5.0f, 5.0f, 5.0f));
-  light_colors_.push_back(glm::vec3(5.0f, 5.0f, 5.0f));
+  light_colors_.push_back(lightColor0);
+  light_colors_.push_back(lightColor1);
+  light_colors_.push_back(lightColor2);
+  light_colors_.push_back(lightColor3);
+
 
 //  light_colors_.push_back(glm::vec3(5.0f, 5.0f, 5.0f));
 //  light_colors_.push_back(glm::vec3(10.0f, 0.0f, 0.0f));
@@ -352,6 +370,23 @@ void Scene3D::End()
 }
 
 void Scene3D::Update(const float dt) {
+
+  aspect = aspect_h / aspect_v;
+
+  light_positions_[0] = lightPos0;
+  light_positions_[1] = lightPos1;
+  light_positions_[2] = lightPos2;
+  light_positions_[3] = lightPos3;
+
+  light_colors_[0] = lightColor0;
+  light_colors_[1] = lightColor1;
+  light_colors_[2] = lightColor2;
+  light_colors_[3] = lightColor3;
+
+
+
+
+
   // Mise à jour de la caméra et du temps écoulé
   UpdateCamera(dt);
   elapsedTime_ += dt;
@@ -407,10 +442,6 @@ void Scene3D::Update(const float dt) {
   shader_model_.SetVec3("viewPos", camera_.camera_position_);
 
 
-
-
-
-
   // Rendu du premier modèle (model_) avec normal mapping
   model = glm::mat4(1.0f);
   model = glm::translate(model, glm::vec3(1.0f, 0.0f, 0.0f));
@@ -445,7 +476,7 @@ void Scene3D::Update(const float dt) {
   glBindTexture(GL_TEXTURE_2D, ground_text_);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, ground_text_normal_);
-  glDisable((GL_CULL_FACE));
+  //glDisable((GL_CULL_FACE));
   normal_renderQuad();
   glEnable(GL_CULL_FACE);
 
@@ -522,6 +553,7 @@ void Scene3D::Update(const float dt) {
   glBindTexture(GL_TEXTURE_2D, pingpong_color_buffer_[!horizontal]);
   shader_bloom_final_.SetInt("bloom", bloom_state_);
   shader_bloom_final_.SetFloat("exposure", exposure_);
+  shader_bloom_final_.SetFloat("gamma", gamma_);
   renderQuad();
 }
 
@@ -590,12 +622,82 @@ void Scene3D::DrawImGui()
   ImGui::Checkbox("Enable Normal", &Normal_state_);
 
   ImGui::SliderFloat("Exposure", &exposure_, 0.01f, 10.0f, "%.1f");
+  ImGui::SliderFloat("gamma", &gamma_, 0.01f, 10.0f, "%.1f");
+  ImGui::SliderFloat("fovY", &fovY, 0.01f, 3.0f, "%.1f");
+  ImGui::SliderFloat("zNear", &zNear, 0.01f, 10.0f, "%.1f");
+  ImGui::SliderFloat("zFar", &zFar, 0.01f, 1000.0f, "%.1f");
+  ImGui::SliderFloat("aspect", &aspect, 0.01f, 5.0f, "%.1f");
+
+  static const char* resolution_items[] = {
+      "4/3 (800x600)",
+      "16/9 (1280x720)",
+      "16/10 (1280x800)",
+      "1200x720",
+      "Custom"
+  };
+  static int current_resolution = 39; // On démarre par exemple sur 16/9
+
+
+
+  if (ImGui::Combo("My Window -", &current_resolution, resolution_items, IM_ARRAYSIZE(resolution_items)))
+  {
+
+    switch (current_resolution)
+    {
+      case 0: // 4/3 (800x600)
+        aspect_h = 800.0f;
+        aspect_v = 600.0f;
+        break;
+      case 1: // 16/9 (1280x720)
+        aspect_h = 1280.0f;
+        aspect_v = 720.0f;
+        break;
+      case 2: // 16/10 (1280x800)
+        aspect_h = 1280.0f;
+        aspect_v = 800.0f;
+        break;
+      case 3: // 1200x720
+        aspect_h = 1200.0f;
+        aspect_v = 720.0f;
+        break;
+      case 4: // Custom
+        // Ne change rien ici pour permettre la personnalisation via les sliders
+        break;
+    }
+  }
+
+  if (current_resolution == 4)
+  {
+    ImGui::SliderFloat("Width", &aspect_h, 100.0f, 2500.0f, "%.1f");
+    ImGui::SliderFloat("Height", &aspect_v, 100.0f, 2500.0f, "%.1f");
+  }
+
+
+
 
   if (ImGui::CollapsingHeader("Normal Settings")) {
     ImGui::SliderFloat("Normal_X", &Normal_x, -30.01f, 30.0f, "%.1f");
     ImGui::SliderFloat("Normal_Y", &Normal_y, -30.01f, 30.0f, "%.1f");
     ImGui::SliderFloat("Normal_Z", &Normal_z, -30.01f, 30.0f, "%.1f");
     ImGui::SliderFloat("Normal_Angle", &Normal_Rotation_angle, -360.01f, 360.0f, "%.1f");
+  }
+  if (ImGui::CollapsingHeader("light Settings")) {
+    if (ImGui::CollapsingHeader("light 1")) {
+      ImGui::DragFloat3("Light Position 0", glm::value_ptr(lightPos0), 0.1f);
+      ImGui::ColorPicker3("Light Colour", reinterpret_cast<float *>(&lightColor0));
+    }
+    if (ImGui::CollapsingHeader("light 2")) {
+      ImGui::DragFloat3("Light Position 1", glm::value_ptr(lightPos1), 0.1f);
+      ImGui::ColorPicker3("Light Colour", reinterpret_cast<float *>(&lightColor1));
+    }
+    if (ImGui::CollapsingHeader("light 3")) {
+      ImGui::DragFloat3("Light Position 2", glm::value_ptr(lightPos2), 0.1f);
+      ImGui::ColorPicker3("Light Colour", reinterpret_cast<float *>(&lightColor2));
+    }
+    if (ImGui::CollapsingHeader("light 4")) {
+      ImGui::DragFloat3("Light Position 3", glm::value_ptr(lightPos3), 0.1f);
+      ImGui::ColorPicker3("Light Colour", reinterpret_cast<float *>(&lightColor3));
+    }
   }
 
 
