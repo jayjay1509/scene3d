@@ -20,6 +20,14 @@
 #include <random>
 #include "texture_loader.h"
 
+
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
+#include <tracy/TracyOpenGL.hpp>
+#endif
+
+
 namespace gpr5300
 {
 class Scene3D final : public Scene
@@ -149,6 +157,12 @@ class Scene3D final : public Scene
 
 void Scene3D::Begin()
 {
+#ifdef TRACY_ENABLE
+  TracyCZoneN(const begin, "begin", true)
+        TracyGpuZone("begin")
+#endif
+
+
   // configure global opengl state
   // -----------------------------
   glEnable(GL_DEPTH_TEST);
@@ -511,21 +525,80 @@ void Scene3D::Begin()
   skybox_program_.Use();
   skybox_program_.SetInt("skybox", 0);
 
+#ifdef TRACY_ENABLE
+  TracyCZoneEnd(begin)
+        TracyGpuCollect
+#endif
+
 }
 
 void Scene3D::End()
 {
+
+#ifdef TRACY_ENABLE
+  TracyCZoneN(const End, "End", true)
+  TracyGpuZone("End")
+#endif
+
   shader_blur_.Delete();
   shader_light_.Delete();
   shader_bloom_final_.Delete();
   skybox_program_.Delete();
   Instancing_shader_.Delete();
+  Normal_Map.Delete();
+  shader_model_.Delete();
+  geometry_shader_.Delete();
+  lighting_shader_.Delete();
+  ssao_shader_.Delete();
+  ssao_blur_shader_.Delete();
+
+
+  glDeleteFramebuffers(1, &hdr_fbo_);
+  glDeleteFramebuffers(1, &g_buffer_);
+  glDeleteFramebuffers(1, &ssao_fbo_);
+  glDeleteFramebuffers(1, &ssao_blur_fbo_);
+  glDeleteFramebuffers(2, pingpong_fbo_);
+
+
+  glDeleteTextures(2, color_buffer_);
+  glDeleteTextures(1, &g_position_);
+  glDeleteTextures(1, &g_normal_);
+  glDeleteTextures(1, &g_albedo_);
+  glDeleteTextures(1, &noise_texture_);
+  glDeleteTextures(1, &ssao_color_buffer_);
+  glDeleteTextures(1, &ssao_color_buffer_blur_);
+  glDeleteTextures(2, pingpong_color_buffer_);
+  glDeleteTextures(1, &skybox_texture_);
+  glDeleteTextures(1, &ground_text_);
+  glDeleteTextures(1, &ground_text_normal_);
+
+
+  glDeleteRenderbuffers(1, &rbo_depth_);
+
+
+  glDeleteBuffers(1, &Instancing_buffer_);
+
+
+  glDeleteVertexArrays(1, &skybox_vao_);
+  glDeleteBuffers(1, &skybox_vbo_);
+
+
   delete[] modelMatrices;
   modelMatrices = nullptr;
+
+#ifdef TRACY_ENABLE
+  TracyCZoneEnd(End)
+  TracyGpuCollect
+#endif
 
 }
 
 void Scene3D::Update(const float dt) {
+#ifdef TRACY_ENABLE
+  TracyCZoneN(const Update, "Update", true)
+        TracyGpuZone("Update")
+#endif
+
 
   aspect = aspect_h / aspect_v;
 
@@ -630,7 +703,7 @@ void Scene3D::Update(const float dt) {
   glBindTexture(GL_TEXTURE_2D, ground_text_normal_);
   normal_renderQuad();
   }
-  glDisable((GL_CULL_FACE));
+  //glEnable(GL_CULL_FACE);
 
 
 
@@ -791,10 +864,22 @@ void Scene3D::Update(const float dt) {
   shader_bloom_final_.SetFloat("exposure", exposure_);
   shader_bloom_final_.SetFloat("gamma", gamma_);
   renderQuad();
+
+#ifdef TRACY_ENABLE
+  TracyCZoneEnd(Update)
+        TracyGpuCollect
+#endif
+
 }
 
 void Scene3D::OnEvent(const SDL_Event& event)
 {
+
+#ifdef TRACY_ENABLE
+  TracyCZoneN(const OnEvent, "OnEvent", true)
+        TracyGpuZone("OnEvent")
+#endif
+
   switch (event.type)
   {
     case SDL_KEYDOWN:
@@ -806,6 +891,11 @@ void Scene3D::OnEvent(const SDL_Event& event)
     default:
       break;
   }
+
+#ifdef TRACY_ENABLE
+  TracyCZoneEnd(OnEvent)
+  TracyGpuCollect
+#endif
 }
 
 void Scene3D::UpdateCamera(const float dt)
@@ -850,6 +940,8 @@ void Scene3D::UpdateCamera(const float dt)
 
 void Scene3D::DrawImGui()
 {
+
+
   ImGui::Begin("My Window"); // Start a new window
 
   //ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -957,6 +1049,7 @@ void Scene3D::DrawImGui()
   // ImGui::ColorPicker3("Light Colour", reinterpret_cast<float*>(&light_colors_[0]));
   ImGui::End(); // End the window
 }
+
 }
 
 

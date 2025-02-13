@@ -8,6 +8,12 @@
 
 #include <cassert>
 #include <chrono>
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
+#include <tracy/TracyOpenGL.hpp>
+#endif
+
 
 namespace gpr5300
 {
@@ -151,6 +157,8 @@ namespace gpr5300
         ImGui::StyleColorsClassic();
         ImGui_ImplSDL2_InitForOpenGL(window_, glRenderContext_);
         ImGui_ImplOpenGL3_Init("#version 300 es");
+
+        TracyGpuContext;
 
         scene_->Begin();
     }
